@@ -22,7 +22,7 @@ Matching semantics (see conversation for the product-decision framing):
   - sources_enabled: if set, only jobs from one of those specific sites
     match; if None (the default), all sources are eligible
 """
-from app.models import Job, SearchCriteria
+from app.models import Job, SearchCriteria, User, UserJobMatch
 
 
 def job_matches_criteria(job: Job, criteria: SearchCriteria) -> bool:
@@ -77,3 +77,44 @@ def filter_jobs_for_any_active_criteria(jobs: list[Job], criteria_list: list[Sea
                 matches[job.id] = criteria
                 break
     return matches
+
+
+CANDIDATE_POOL_WINDOW_DAYS = 60
+
+
+def compute_and_materialize_matches(session, user: User, criteria_list: list[SearchCriteria]) -> list:
+    """
+    Runs matching against recent jobs, ensures a user_job_matches row
+    exists for every hit. Returns the matched job IDs.
+
+    Moved here (from app/routers/jobs.py, where it started life) once a
+    second caller needed it: the Phase 5 scheduler calls this for every
+    user with active criteria on a timer, and the live /feed endpoint
+    still calls it too, for whoever happens to load the app between
+    scheduler runs. Same function, same behavior, two different
+    triggers — which is exactly the point of building it this way from
+    the start (see the module docstring in app/routers/jobs.py history).
+    """
+    from datetime import datetime, timedelta, timezone
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=CANDIDATE_POOL_WINDOW_DAYS)
+    candidate_jobs = (
+        session.query(Job)
+        .filter((Job.posted_date == None) | (Job.posted_date >= cutoff))  # noqa: E711
+        .all()
+    )
+
+    matched = filter_jobs_for_any_active_criteria(candidate_jobs, criteria_list)
+
+    existing_job_ids = {
+        m.job_id for m in session.query(UserJobMatch.job_id).filter_by(user_id=user.id).all()
+    }
+    for job_id, matched_criteria in matched.items():
+        if job_id not in existing_job_ids:
+            session.add(UserJobMatch(
+                user_id=user.id, job_id=job_id,
+                matched_criteria_id=matched_criteria.id, status="new",
+            ))
+    session.commit()
+
+    return list(matched.keys())

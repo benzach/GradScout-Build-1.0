@@ -27,39 +27,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_user, get_db
-from app.matching import filter_jobs_for_any_active_criteria
-from app.models import Job, SearchCriteria, User, UserJobMatch
+from app.matching import compute_and_materialize_matches
+from app.models import SearchCriteria, User, UserJobMatch
 from app.routers.criteria import _get_owned_criteria
 from app.schemas import MatchOut, MatchStatus, MatchStatusUpdate, PaginatedFeed
 
 router = APIRouter(tags=["jobs"])
-
-CANDIDATE_POOL_WINDOW_DAYS = 60
-
-
-def _compute_and_materialize_matches(session: Session, user: User, criteria_list: list[SearchCriteria]) -> list[UUID]:
-    """Runs matching against recent jobs, ensures a user_job_matches row exists for every hit. Returns the matched job IDs."""
-    cutoff = datetime.now(timezone.utc) - timedelta(days=CANDIDATE_POOL_WINDOW_DAYS)
-    candidate_jobs = (
-        session.query(Job)
-        .filter((Job.posted_date == None) | (Job.posted_date >= cutoff))  # noqa: E711
-        .all()
-    )
-
-    matched = filter_jobs_for_any_active_criteria(candidate_jobs, criteria_list)
-
-    existing_job_ids = {
-        m.job_id for m in session.query(UserJobMatch.job_id).filter_by(user_id=user.id).all()
-    }
-    for job_id, matched_criteria in matched.items():
-        if job_id not in existing_job_ids:
-            session.add(UserJobMatch(
-                user_id=user.id, job_id=job_id,
-                matched_criteria_id=matched_criteria.id, status="new",
-            ))
-    session.commit()
-
-    return list(matched.keys())
 
 
 @router.get("/feed", response_model=PaginatedFeed)
@@ -79,7 +52,7 @@ def get_feed(
     if not criteria_list:
         return PaginatedFeed(items=[], total=0, limit=limit, offset=offset)
 
-    matched_job_ids = _compute_and_materialize_matches(session, user, criteria_list)
+    matched_job_ids = compute_and_materialize_matches(session, user, criteria_list)
 
     query = (
         session.query(UserJobMatch)

@@ -1,6 +1,6 @@
 # GradScout Build Roadmap
 
-**Status: Phase 3 complete (backend API core). This document picks up from Phase 4.**
+**Status: Phase 5 complete (background scheduler — the system now watches constantly). This document picks up from Phase 6.**
 
 ## How we'll work together
 
@@ -23,7 +23,9 @@ You'll notice phases don't wait until "everything is built" before you get invol
 | 1 | Data model + local database | ✅ Done |
 | 2 | Port the 6 scrapers | ✅ Done (7 — w4mpjobs added back in) |
 | 3 | Backend API core (FastAPI) | ✅ Done |
-| 4 | Real infrastructure (Supabase, Railway, Vercel accounts) | Next |
+| 4 | Real infrastructure (Supabase, Railway, Vercel accounts) | ✅ Done |
+| 5 | Scheduler + backend deployment | ✅ Done |
+| 6 | Frontend PWA | Next |
 | 3 | Backend API core (FastAPI) | |
 | 4 | Real infrastructure (Supabase, Railway, Vercel accounts) | |
 | 5 | Scheduler + backend deployment | |

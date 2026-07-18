@@ -8,19 +8,38 @@ not something maintained separately. This is what Phase 3's checkpoint
 uses: create a test user, save some criteria, pull a real feed, all
 through that page in your browser.
 """
+import os
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.routers import criteria, jobs, users
+from app.scheduler import start_scheduler, stop_scheduler
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # DISABLE_SCHEDULER exists so tests (and local one-off API poking)
+    # don't accidentally kick off real scraping/API calls every time the
+    # app starts — set it in test fixtures, leave it unset in deployment.
+    if os.environ.get("DISABLE_SCHEDULER") != "true":
+        start_scheduler()
+    yield
+    stop_scheduler()
+
 
 app = FastAPI(
     title="GradScout API",
     description=(
         "Graduate job matching API. Auth is currently a STUB (see "
         "app/auth.py) — pass any real user's UUID in an X-User-Id header. "
-        "Real auth arrives in Phase 4."
+        "Real auth arrives in Phase 4. A background scheduler (app/scheduler.py) "
+        "scrapes all sources and computes matches on an interval — see /health "
+        "for basic status."
     ),
-    version="0.3.0",
+    version="0.5.0",
+    lifespan=lifespan,
 )
 
 # Permissive for now (Phase 4/dev) — every origin allowed. Tighten this

@@ -114,3 +114,23 @@ reference once you have accounts:
 4. Railway builds automatically (`railway.json` in this folder tells it
    how) and gives you a public URL — visit `<that-url>/docs` to confirm
    it's alive.
+
+## The scheduler (Phase 5)
+
+Runs inside the same process as the API — no separate Railway service
+needed. Starts automatically on app startup (see `app/main.py`'s
+lifespan handler), runs once immediately, then every
+`SCRAPE_INTERVAL_MINUTES` (default 20) thereafter.
+
+Each cycle: scrape every enabled source → dedup → store (Phase 2's
+`run_pipeline`) → for every user with active criteria, compute and save
+any new matches (Phase 3's `compute_and_materialize_matches`, now
+called by a timer as well as by the live `/feed` endpoint).
+
+Failures are visible, not silent: per-source failures land in
+`sources.last_scrape_error` (queryable in the database), and everything
+prints to stdout, which Railway captures as logs — check **Deployments
+→ [latest] → Logs** to watch cycles happen in real time.
+
+To disable the scheduler (e.g. for local API poking without triggering
+real scrapes): set `DISABLE_SCHEDULER=true`.

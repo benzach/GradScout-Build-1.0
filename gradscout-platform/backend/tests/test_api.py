@@ -4,6 +4,9 @@ job feed (the part that actually proves criteria filtering + the
 get-or-create match pattern work correctly through real HTTP requests,
 not just direct function calls).
 """
+import os
+os.environ["DISABLE_SCHEDULER"] = "true"  # must be set before importing app.main
+
 import pytest
 from fastapi.testclient import TestClient
 
