@@ -40,6 +40,20 @@ app.include_router(criteria.router)
 app.include_router(jobs.router)
 
 
+@app.get("/")
+def root():
+    """
+    Friendly landing so visiting the bare domain doesn't look broken —
+    without this, '/' returns an unstyled 404 that's easy to mistake for
+    a genuine deployment failure.
+    """
+    return {
+        "service": "GradScout API",
+        "docs": "/docs",
+        "health": "/health",
+    }
+
+
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
