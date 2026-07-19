@@ -158,3 +158,49 @@ def test_one_source_failing_does_not_stop_the_others(session):
         for s in other_sources:
             s.enabled = original_states[s.name]
         session.commit()
+
+
+def test_one_bad_job_does_not_lose_the_rest_of_the_batch(session):
+    """
+    Regression test for a real production incident: one job with
+    malformed salary data crashed process_scraped_job, which took down
+    the ENTIRE run_pipeline call — losing every other job from that
+    source (including ones already fetched but not yet processed) and
+    every source after it in the loop, since the try/except only
+    wrapped scraper.scrape(), not the per-job processing inside it.
+    """
+    other_sources = session.query(Source).filter(Source.name != "adzuna").all()
+    original_states = {s.name: s.enabled for s in other_sources}
+    for s in other_sources:
+        s.enabled = False
+    session.commit()
+
+    def mock_scrape(self):
+        return [
+            {"title": "Good Job A", "url": "https://x.example/a", "company": "Co A",
+             "location": "London", "salary": "£30,000", "description": "d", "posted_date": "", "contract_type": ""},
+            {"title": "Bad Job", "url": "https://x.example/bad", "company": "Co Bad",
+             "location": "London", "salary": ",,,", "description": "d", "posted_date": "", "contract_type": ""},
+            {"title": "Good Job B", "url": "https://x.example/b", "company": "Co B",
+             "location": "London", "salary": "£40,000", "description": "d", "posted_date": "", "contract_type": ""},
+        ]
+
+    # Deliberately reinstate the OLD buggy regex pattern to prove this
+    # is real defense-in-depth, independent of the regex fix itself —
+    # this test protects against ANY future per-job data quirk, not
+    # just the one that actually occurred in production.
+    import re
+    try:
+        with patch("app.scrapers.adzuna_scraper.AdzunaScraper.scrape", mock_scrape), \
+             patch("app.dedup.scoring.SALARY_NUMBER_PATTERN", re.compile(r"£?\s?([\d,]+)")):
+            run_pipeline(session)
+
+        titles = {j.title for j in session.query(Job).all()}
+        assert titles == {"Good Job A", "Good Job B"}  # bad one skipped, neighbors survive
+
+        source = session.query(Source).filter_by(name="adzuna").first()
+        assert source.last_scrape_status == "partial"
+    finally:
+        for s in other_sources:
+            s.enabled = original_states[s.name]
+        session.commit()

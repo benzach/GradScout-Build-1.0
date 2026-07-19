@@ -48,12 +48,29 @@ def run_pipeline(session: Session) -> dict:
             continue
 
         print(f"  -> found {len(scraped_jobs)} listing(s)")
+        job_errors = 0
         for job in scraped_jobs:
-            result = process_scraped_job(session, source.name, job)
-            summary["jobs"][result["action"]] += 1
+            try:
+                result = process_scraped_job(session, source.name, job)
+                summary["jobs"][result["action"]] += 1
+            except Exception as e:
+                # One malformed job's data (a bad salary string, an
+                # unparseable date, whatever) must not take down the
+                # REST of this source's jobs, let alone every source
+                # after it in the loop — that's exactly what happened
+                # before this fix: a single job crashed the whole
+                # function, and 6 other sources never even ran that
+                # cycle. Same failure-isolation principle as the
+                # per-source and per-user handling elsewhere in this
+                # codebase, applied at the level it was actually missing.
+                job_errors += 1
+                print(f"  -> job failed (skipped, continuing): {e}")
+                session.rollback()  # this job's partial DB state, not the whole session's prior work
+        if job_errors:
+            print(f"  -> {job_errors} job(s) failed and were skipped")
 
-        source.last_scrape_status = "success"
-        source.last_scrape_error = None
+        source.last_scrape_status = "success" if job_errors == 0 else "partial"
+        source.last_scrape_error = f"{job_errors} job(s) failed during processing" if job_errors else None
         source.last_scraped_at = datetime.now(timezone.utc)
         session.commit()
         summary["sources_run"] += 1

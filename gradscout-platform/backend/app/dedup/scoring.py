@@ -60,7 +60,7 @@ def parse_salary_range(salary_text: str) -> tuple[int | None, int | None]:
     return min(nums), max(nums)
 
 
-SALARY_NUMBER_PATTERN = re.compile(r"£?\s?([\d,]+)")
+SALARY_NUMBER_PATTERN = re.compile(r"£?\s?(\d[\d,]*)")
 
 
 @dataclass

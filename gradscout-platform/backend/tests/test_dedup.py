@@ -116,3 +116,25 @@ class TestDedupEngine:
         outcome = dedup_against_existing({"title": "X", "company": "Y", "location": "Z"}, [])
         assert outcome.action == "insert_new"
         assert outcome.match_result is None
+
+
+def test_parse_salary_range_handles_comma_only_match_without_crashing():
+    """
+    Regression test for a real production crash: the salary-number regex
+    used to allow a match made entirely of commas with zero actual
+    digits (comma was in the character class, `+` didn't require a
+    digit specifically). Some job's salary text apparently contained a
+    stray/malformed comma with no number attached — after stripping
+    commas, int("") crashed the whole scheduler cycle. The fix requires
+    every match to START with a real digit, so a comma-only match can
+    never occur.
+    """
+    from app.dedup.scoring import parse_salary_range
+
+    assert parse_salary_range(", ") == (None, None)
+    assert parse_salary_range("£,") == (None, None)
+    assert parse_salary_range(",,") == (None, None)
+    assert parse_salary_range("Salary: ,") == (None, None)
+    # normal values still parse correctly
+    assert parse_salary_range("£28,000 - £32,000") == (28000, 32000)
+    assert parse_salary_range("£30,000") == (30000, 30000)
