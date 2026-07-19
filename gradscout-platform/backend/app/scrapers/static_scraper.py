@@ -20,7 +20,19 @@ HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-    )
+    ),
+    # A real browser never sends ONLY a User-Agent — some bot-detection
+    # systems specifically flag requests missing the rest of a normal
+    # browser's header set as automated traffic, independent of the
+    # User-Agent string's content. This won't defeat IP-based blocking
+    # (the likely cause if a site starts 403'ing only once requests come
+    # from cloud-hosted infrastructure like Railway, not from a home
+    # connection) but it's a genuine, low-cost thing to rule out first.
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-GB,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
 }
 TIMEOUT = 15
 

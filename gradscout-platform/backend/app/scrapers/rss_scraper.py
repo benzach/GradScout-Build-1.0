@@ -85,7 +85,28 @@ def _fetch_job_detail_fields(url: str) -> dict:
 
 class RSSScraper(BaseScraper):
     def scrape(self) -> list[dict]:
-        feed = feedparser.parse(self.url)
+        # Deliberately NOT feedparser.parse(self.url) for real HTTP(S)
+        # URLs — that lets feedparser make the network call itself, with
+        # no timeout at all (a real gap: every other network call in
+        # this codebase sets timeout=15, this was the one exception). If
+        # the source site is slow or silently drops the connection, that
+        # call can hang indefinitely; if it hangs long enough for the
+        # host to kill and restart the process, our own failure-recording
+        # code in app/pipeline.py's except block never even runs, since
+        # nothing was ever raised — the source's last_scrape_status stays
+        # NULL forever instead of showing a real error. Fetching
+        # explicitly first, with the same timeout/headers pattern every
+        # other scraper uses, closes that gap.
+        #
+        # Local file paths (used by tests to avoid real network calls
+        # entirely) skip this and go straight to feedparser, since
+        # there's no network request to time out on in the first place.
+        if self.url.startswith("http://") or self.url.startswith("https://"):
+            resp = requests.get(self.url, headers=DETAIL_HEADERS, timeout=DETAIL_TIMEOUT)
+            resp.raise_for_status()
+            feed = feedparser.parse(resp.content)
+        else:
+            feed = feedparser.parse(self.url)
 
         if feed.bozo and not feed.entries:
             raise ValueError(f"Failed to parse RSS feed for {self.name}: {feed.bozo_exception}")

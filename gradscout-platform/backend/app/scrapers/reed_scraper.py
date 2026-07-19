@@ -36,7 +36,13 @@ class ReedScraper(BaseScraper):
 
     def _parse_job(self, item: dict) -> dict:
         salary_min, salary_max = item.get("minimumSalary"), item.get("maximumSalary")
-        currency = item.get("currency", "GBP")
+        # NOTE: `.get(key, default)` only falls back to `default` when the
+        # KEY IS MISSING — if Reed's API returns "currency": null
+        # explicitly (seen in practice for jobs with no salary at all),
+        # .get() returns None, not "GBP", and `None + " "` crashes. The
+        # `or` pattern below handles both "missing" and "present but
+        # null" the same way, everywhere it matters in this function.
+        currency = item.get("currency") or "GBP"
         symbol = "£" if currency == "GBP" else currency + " "
 
         salary = ""
@@ -54,12 +60,12 @@ class ReedScraper(BaseScraper):
             contract_type_parts.append("Part-time")
 
         return {
-            "title": item.get("jobTitle", "").strip(),
-            "url": item.get("jobUrl", "").strip(),
-            "company": item.get("employerName", "") or "",
-            "location": item.get("locationName", "") or "",
+            "title": (item.get("jobTitle") or "").strip(),
+            "url": (item.get("jobUrl") or "").strip(),
+            "company": item.get("employerName") or "",
+            "location": item.get("locationName") or "",
             "salary": salary,
             "contract_type": ", ".join(contract_type_parts),
-            "description": item.get("jobDescription", "") or "",
-            "posted_date": item.get("date", "") or "",
+            "description": item.get("jobDescription") or "",
+            "posted_date": item.get("date") or "",
         }
