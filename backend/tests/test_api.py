@@ -1,20 +1,70 @@
 """
-Tests for the full API surface: users, search criteria CRUD, and the
-job feed (the part that actually proves criteria filtering + the
-get-or-create match pattern work correctly through real HTTP requests,
-not just direct function calls).
+Tests for the full API surface: search criteria CRUD and the job feed
+(the part that actually proves criteria filtering + the get-or-create
+match pattern work correctly through real HTTP requests, not just
+direct function calls).
+
+Uses the same JWT-generation pattern as test_auth.py — a genuine ES256
+key pair standing in for Supabase's, exercising the real auth flow
+end-to-end rather than the old X-User-Id stub.
 """
+import base64
 import os
 os.environ["DISABLE_SCHEDULER"] = "true"  # must be set before importing app.main
+os.environ.setdefault("SUPABASE_URL", "https://test-project.supabase.co")
 
+from datetime import datetime, timedelta, timezone
+from unittest.mock import patch, MagicMock
+from uuid import uuid4
+
+import jwt
 import pytest
+from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi.testclient import TestClient
 
 from app.main import app
 from app.db import get_session
 from app.models import Job, JobSource, SearchCriteria, User, UserJobMatch
+import app.auth as auth_module
 
 client = TestClient(app)
+
+
+def _b64url(n: int, length: int = 32) -> str:
+    return base64.urlsafe_b64encode(n.to_bytes(length, "big")).rstrip(b"=").decode()
+
+
+@pytest.fixture(scope="module")
+def key_pair():
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    public_numbers = private_key.public_key().public_numbers()
+    kid = "test-key-id"
+    jwk = {
+        "kid": kid, "kty": "EC", "crv": "P-256", "alg": "ES256", "use": "sig",
+        "x": _b64url(public_numbers.x), "y": _b64url(public_numbers.y),
+    }
+    return {"private_key": private_key, "kid": kid, "jwks": {"keys": [jwk]}}
+
+
+def _make_token(key_pair, sub=None, email="test@example.com"):
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": str(sub or uuid4()), "email": email, "aud": "authenticated",
+        "exp": now + timedelta(hours=1), "iat": now,
+    }
+    return jwt.encode(payload, key_pair["private_key"], algorithm="ES256", headers={"kid": key_pair["kid"]})
+
+
+@pytest.fixture(autouse=True)
+def mock_jwks(key_pair):
+    """Every test in this file gets its Authorization Bearer tokens verified against the shared test key pair, not a real Supabase project."""
+    auth_module._jwks_cache["keys_by_kid"] = {}
+    auth_module._jwks_cache["fetched_at"] = 0.0
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    resp.json.return_value = key_pair["jwks"]
+    with patch("app.auth.requests.get", return_value=resp):
+        yield
 
 
 @pytest.fixture
@@ -31,41 +81,36 @@ def session():
 
 
 @pytest.fixture
-def user(session):
-    r = client.post("/users", json={"email": "test@example.com"})
-    assert r.status_code == 201
-    return r.json()
-
-
-@pytest.fixture
-def auth_headers(user):
-    return {"X-User-Id": user["id"]}
+def auth_headers(session, key_pair):
+    """A fresh user, provisioned automatically on their first authenticated request — exactly like a real new signup."""
+    token = _make_token(key_pair)
+    return {"Authorization": f"Bearer {token}"}
 
 
 class TestAuth:
-    def test_missing_header_rejected(self, session):
+    def test_missing_token_rejected(self, session):
         r = client.get("/criteria")
-        assert r.status_code == 422  # FastAPI's required-header validation
+        assert r.status_code == 401  # HTTPBearer's actual default for a missing Authorization header
 
-    def test_invalid_uuid_rejected(self, session):
-        r = client.get("/criteria", headers={"X-User-Id": "not-a-uuid"})
+    def test_malformed_token_rejected(self, session):
+        r = client.get("/criteria", headers={"Authorization": "Bearer not-a-real-jwt"})
         assert r.status_code == 401
 
-    def test_unknown_user_rejected(self, session):
-        r = client.get("/criteria", headers={"X-User-Id": "00000000-0000-0000-0000-000000000000"})
+    def test_token_signed_by_unknown_key_rejected(self, session, key_pair):
+        forged_key = ec.generate_private_key(ec.SECP256R1())
+        now = datetime.now(timezone.utc)
+        token = jwt.encode(
+            {"sub": str(uuid4()), "aud": "authenticated", "exp": now + timedelta(hours=1), "iat": now},
+            forged_key, algorithm="ES256", headers={"kid": key_pair["kid"]},
+        )
+        r = client.get("/criteria", headers={"Authorization": f"Bearer {token}"})
         assert r.status_code == 401
 
-
-class TestUsers:
-    def test_create_user(self, session):
-        r = client.post("/users", json={"email": "new@example.com"})
-        assert r.status_code == 201
-        assert r.json()["email"] == "new@example.com"
-        assert r.json()["subscription_tier"] == "free"
-
-    def test_duplicate_email_rejected(self, session, user):
-        r = client.post("/users", json={"email": user["email"]})
-        assert r.status_code == 409
+    def test_valid_token_auto_provisions_user(self, session, key_pair):
+        token = _make_token(key_pair, email="brandnew@example.com")
+        r = client.get("/criteria", headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 200  # succeeds even though this user never existed before
+        assert session.query(User).filter_by(email="brandnew@example.com").count() == 1
 
 
 class TestCriteria:
@@ -81,12 +126,12 @@ class TestCriteria:
         assert r.status_code == 200
         assert len(r.json()) == 1
 
-    def test_cannot_access_another_users_criteria(self, session, auth_headers):
+    def test_cannot_access_another_users_criteria(self, session, auth_headers, key_pair):
         r = client.post("/criteria", json={"keywords": ["x"]}, headers=auth_headers)
         criteria_id = r.json()["id"]
 
-        other_user = client.post("/users", json={"email": "other@example.com"}).json()
-        other_headers = {"X-User-Id": other_user["id"]}
+        other_token = _make_token(key_pair, email="other@example.com")
+        other_headers = {"Authorization": f"Bearer {other_token}"}
 
         r = client.get(f"/criteria/{criteria_id}", headers=other_headers)
         assert r.status_code == 404  # not 403 - see _get_owned_criteria's docstring
@@ -168,14 +213,14 @@ class TestFeed:
         assert r.status_code == 200
         assert r.json()["status"] == "applied"
 
-    def test_cannot_update_another_users_match(self, session, auth_headers):
+    def test_cannot_update_another_users_match(self, session, auth_headers, key_pair):
         self._seed_job(session, "Graduate Analyst", "Barclays", "London")
         client.post("/criteria", json={"keywords": ["analyst"]}, headers=auth_headers)
         feed = client.get("/feed", headers=auth_headers).json()
         match_id = feed["items"][0]["id"]
 
-        other_user = client.post("/users", json={"email": "other2@example.com"}).json()
-        other_headers = {"X-User-Id": other_user["id"]}
+        other_token = _make_token(key_pair, email="other2@example.com")
+        other_headers = {"Authorization": f"Bearer {other_token}"}
 
         r = client.patch(f"/matches/{match_id}", json={"status": "applied"}, headers=other_headers)
         assert r.status_code == 404

@@ -134,3 +134,31 @@ prints to stdout, which Railway captures as logs — check **Deployments
 
 To disable the scheduler (e.g. for local API poking without triggering
 real scrapes): set `DISABLE_SCHEDULER=true`.
+
+## Real authentication (Phase 6)
+
+The `X-User-Id` stub is gone. Every authenticated endpoint now requires
+a genuine Supabase-issued JWT:
+
+```
+Authorization: Bearer <token>
+```
+
+Verification uses Supabase's JWKS endpoint (the current recommended
+approach — Supabase explicitly advises against the older shared-secret
+method), fetched and cached in memory. There's no `POST /users`
+endpoint anymore either: the first time a valid token from a given
+Supabase user hits any endpoint, their app-side profile row is created
+automatically, using the same UUID Supabase assigned them.
+
+**Requires `SUPABASE_URL`** (e.g. `https://xxxxx.supabase.co`, found
+under Project Settings → API → Project URL) as an environment variable
+— add this to Railway before/alongside deploying this change, or every
+authenticated request will fail with a 500.
+
+**Low-risk timing**: the scheduler doesn't go through this auth layer
+at all (it calls the pipeline and matching logic directly), so scraping
+and dedup keep running uninterrupted regardless. Only `/criteria` and
+`/feed` are affected — and since there's no frontend yet, nothing real
+depends on the old stub today. This is about as safe a moment as this
+change will ever get to make.

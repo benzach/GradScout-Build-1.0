@@ -4,9 +4,12 @@ GradScout API. Run locally with:
 
 Then visit http://localhost:8000/docs for the interactive API
 documentation — FastAPI builds this automatically from the code, it's
-not something maintained separately. This is what Phase 3's checkpoint
-uses: create a test user, save some criteria, pull a real feed, all
-through that page in your browser.
+not something maintained separately.
+
+Auth is real Supabase JWT verification (app/auth.py) — there's no
+POST /users endpoint. A user's app-side profile row gets created
+automatically the first time a valid token from them hits any
+authenticated endpoint, keyed on the same UUID Supabase assigned them.
 """
 import os
 from contextlib import asynccontextmanager
@@ -14,7 +17,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import criteria, jobs, users
+from app.routers import criteria, jobs
 from app.scheduler import start_scheduler, stop_scheduler
 
 
@@ -32,13 +35,12 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="GradScout API",
     description=(
-        "Graduate job matching API. Auth is currently a STUB (see "
-        "app/auth.py) — pass any real user's UUID in an X-User-Id header. "
-        "Real auth arrives in Phase 4. A background scheduler (app/scheduler.py) "
-        "scrapes all sources and computes matches on an interval — see /health "
-        "for basic status."
+        "Graduate job matching API. Authenticated via Supabase-issued JWTs "
+        "— send a valid Supabase session token as 'Authorization: Bearer <token>'. "
+        "A background scheduler (app/scheduler.py) scrapes all sources and "
+        "computes matches on an interval — see /health for basic status."
     ),
-    version="0.5.0",
+    version="0.6.0",
     lifespan=lifespan,
 )
 
@@ -54,7 +56,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(users.router)
 app.include_router(criteria.router)
 app.include_router(jobs.router)
 
