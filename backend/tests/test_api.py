@@ -25,6 +25,8 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.db import get_session
 from app.models import Job, JobSource, SearchCriteria, User, UserJobMatch
+from app.locations import categorize_location
+from app.industries import categorize_industry
 import app.auth as auth_module
 
 client = TestClient(app)
@@ -117,7 +119,7 @@ class TestCriteria:
     def test_create_and_list(self, auth_headers):
         r = client.post("/criteria", json={
             "label": "Software grad roles", "keywords": ["software", "engineer"],
-            "locations": ["london"], "salary_min": 25000,
+            "locations": ["London"], "salary_min": 25000,
         }, headers=auth_headers)
         assert r.status_code == 201
         assert r.json()["label"] == "Software grad roles"
@@ -137,13 +139,13 @@ class TestCriteria:
         assert r.status_code == 404  # not 403 - see _get_owned_criteria's docstring
 
     def test_update_is_partial(self, auth_headers):
-        r = client.post("/criteria", json={"keywords": ["a"], "locations": ["london"]}, headers=auth_headers)
+        r = client.post("/criteria", json={"keywords": ["a"], "locations": ["London"]}, headers=auth_headers)
         criteria_id = r.json()["id"]
 
         r = client.patch(f"/criteria/{criteria_id}", json={"keywords": ["b"]}, headers=auth_headers)
         assert r.status_code == 200
         assert r.json()["keywords"] == ["b"]
-        assert r.json()["locations"] == ["london"]  # untouched by the partial update
+        assert r.json()["locations"] == ["London"]  # untouched by the partial update
 
     def test_delete(self, auth_headers):
         r = client.post("/criteria", json={"keywords": ["a"]}, headers=auth_headers)
@@ -162,6 +164,8 @@ class TestFeed:
             title=title, normalized_title=title.lower(),
             company=company, normalized_company=company.lower(),
             location=location, normalized_location=location.lower(),
+            location_category=categorize_location(location),  # matches what storage.py does for real jobs
+            industry_category=categorize_industry(title, description),  # matches what storage.py does for real jobs
             description=description, salary_min=salary_min,
         )
         session.add(job)
@@ -181,7 +185,7 @@ class TestFeed:
         self._seed_job(session, "Graduate Chef", "Ritz Hotel", "London",
                         description="Join our kitchen team")
 
-        client.post("/criteria", json={"keywords": ["software"], "locations": ["london"]}, headers=auth_headers)
+        client.post("/criteria", json={"keywords": ["software"], "locations": ["London"]}, headers=auth_headers)
 
         r = client.get("/feed", headers=auth_headers)
         assert r.status_code == 200

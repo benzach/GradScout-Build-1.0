@@ -36,6 +36,8 @@ from app.models import Job, JobSource
 from app.dedup.engine import dedup_against_existing
 from app.dedup.normalize import normalize_title, normalize_company, normalize_location
 from app.dedup.scoring import parse_salary_range
+from app.locations import categorize_location
+from app.industries import categorize_industry
 
 CANDIDATE_POOL_WINDOW_DAYS = 30
 
@@ -68,6 +70,7 @@ def _build_job_row(scraped_job: dict, possible_duplicate_of=None) -> Job:
     norm_title, remote_from_title = normalize_title(scraped_job.get("title", ""))
     norm_location, remote_from_location = normalize_location(scraped_job.get("location", ""))
     salary_min, salary_max = parse_salary_range(scraped_job.get("salary", ""))
+    remote_type = remote_from_title or remote_from_location
 
     return Job(
         title=scraped_job.get("title", ""),
@@ -76,11 +79,13 @@ def _build_job_row(scraped_job: dict, possible_duplicate_of=None) -> Job:
         normalized_company=normalize_company(scraped_job.get("company", "")),
         location=scraped_job.get("location", ""),
         normalized_location=norm_location,
-        remote_type=remote_from_title or remote_from_location,
+        location_category=categorize_location(scraped_job.get("location", ""), remote_type),
+        remote_type=remote_type,
         salary_text=scraped_job.get("salary", ""),
         salary_min=salary_min,
         salary_max=salary_max,
         contract_type=scraped_job.get("contract_type", ""),
+        industry_category=categorize_industry(scraped_job.get("title", ""), scraped_job.get("description", "")),
         description=scraped_job.get("description", ""),
         posted_date=_try_parse_date(scraped_job.get("posted_date", "")),
         possible_duplicate_of=possible_duplicate_of,

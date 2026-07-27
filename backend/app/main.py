@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import criteria, jobs
+from app.routers import criteria, jobs, locations, industries
 from app.scheduler import start_scheduler, stop_scheduler
 
 
@@ -58,6 +58,8 @@ app.add_middleware(
 
 app.include_router(criteria.router)
 app.include_router(jobs.router)
+app.include_router(locations.router)
+app.include_router(industries.router)
 
 
 @app.get("/")

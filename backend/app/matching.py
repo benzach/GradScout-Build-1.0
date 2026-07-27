@@ -13,8 +13,19 @@ matching the level of caution to the level of actual risk/novelty.
 
 Matching semantics (see conversation for the product-decision framing):
   - keywords: ANY match (OR), checked against title + description
-  - locations: ANY match (OR), checked against the job's location string
+  - locations: ANY match (OR), checked against job.location_category —
+    EXACT membership, not substring matching. Every job's location gets
+    reduced to exactly one of a finite set of canonical categories at
+    storage time (see app/locations.py's categorize_location(), called
+    from app/storage.py), and criteria.locations is expected to contain
+    values from that same finite set — this is what makes a genuine
+    dropdown-style location filter meaningful rather than the earlier
+    free-text substring approach, which couldn't guarantee the options
+    shown to a user actually corresponded to real, matchable job data.
   - contract_types: ANY match (OR), checked against the job's contract_type tags
+  - industries: ANY match (OR), checked against job.industry_category —
+    same exact-membership design as locations, mirroring
+    app/industries.py's categorize_industry()
   - salary_min: job's salary must meet the threshold IF it has a parsed
     salary at all — jobs with no parseable salary are KEPT, not excluded,
     since missing data shouldn't count against a job (same philosophy as
@@ -33,13 +44,16 @@ def job_matches_criteria(job: Job, criteria: SearchCriteria) -> bool:
             return False
 
     if criteria.locations:
-        location = (job.location or "").lower()
-        if not any(loc.lower() in location for loc in criteria.locations):
+        if job.location_category not in criteria.locations:
             return False
 
     if criteria.contract_types:
         job_contract = (job.contract_type or "").lower()
         if not any(ct.lower() in job_contract for ct in criteria.contract_types):
+            return False
+
+    if criteria.industries:
+        if job.industry_category not in criteria.industries:
             return False
 
     if criteria.salary_min:

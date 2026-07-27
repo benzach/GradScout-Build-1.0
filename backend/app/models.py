@@ -56,6 +56,7 @@ class SearchCriteria(Base):
     locations = Column(ARRAY(Text), nullable=False, default=list)
     salary_min = Column(Integer)
     contract_types = Column(ARRAY(Text), nullable=False, default=list)
+    industries = Column(ARRAY(Text), nullable=False, default=list)  # values from app.industries.CANONICAL_INDUSTRIES
     sources_enabled = Column(ARRAY(Text))  # NULL = all sources
     active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
@@ -75,11 +76,13 @@ class Job(Base):
     normalized_company = Column(Text, nullable=False)
     location = Column(Text)
     normalized_location = Column(Text)
+    location_category = Column(Text)  # one of app.locations.CANONICAL_LOCATIONS, set at storage time
     remote_type = Column(Text)
     salary_text = Column(Text)
     salary_min = Column(Integer)
     salary_max = Column(Integer)
     contract_type = Column(Text)
+    industry_category = Column(Text)  # one of app.industries.CANONICAL_INDUSTRIES, set at storage time
     description = Column(Text)
     posted_date = Column(DateTime(timezone=True))
     first_seen_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

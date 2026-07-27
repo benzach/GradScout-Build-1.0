@@ -12,9 +12,31 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+
+from app.locations import CANONICAL_LOCATIONS
+from app.industries import CANONICAL_INDUSTRIES
 
 MatchStatus = Literal["new", "seen", "applied", "dismissed"]
+
+
+def _validate_canonical(value: list[str] | None, canonical: list[str], field_name: str, endpoint: str) -> list[str] | None:
+    """
+    Shared validation for any field whose values must come from a
+    finite, backend-defined list (locations, industries — same pattern
+    for any future one). Used by both the Create and Update schema for
+    each such field, rather than duplicating the same field_validator
+    body four times.
+    """
+    if value is None:
+        return value
+    invalid = set(value) - set(canonical)
+    if invalid:
+        raise ValueError(
+            f"Invalid {field_name}(s): {sorted(invalid)}. "
+            f"Must be one of the values returned by GET {endpoint}"
+        )
+    return value
 
 
 # ---------------------------------------------------------------------
@@ -42,10 +64,21 @@ class SearchCriteriaCreate(BaseModel):
     label: str | None = None
     keywords: list[str] = Field(default_factory=list)
     locations: list[str] = Field(default_factory=list)
+    industries: list[str] = Field(default_factory=list)
     salary_min: int | None = None
     contract_types: list[str] = Field(default_factory=list)
     sources_enabled: list[str] | None = None  # None = all sources
     active: bool = True
+
+    @field_validator("locations")
+    @classmethod
+    def _check_locations(cls, value):
+        return _validate_canonical(value, CANONICAL_LOCATIONS, "location", "/locations")
+
+    @field_validator("industries")
+    @classmethod
+    def _check_industries(cls, value):
+        return _validate_canonical(value, CANONICAL_INDUSTRIES, "industry", "/industries")
 
 
 class SearchCriteriaUpdate(BaseModel):
@@ -53,10 +86,21 @@ class SearchCriteriaUpdate(BaseModel):
     label: str | None = None
     keywords: list[str] | None = None
     locations: list[str] | None = None
+    industries: list[str] | None = None
     salary_min: int | None = None
     contract_types: list[str] | None = None
     sources_enabled: list[str] | None = None
     active: bool | None = None
+
+    @field_validator("locations")
+    @classmethod
+    def _check_locations(cls, value):
+        return _validate_canonical(value, CANONICAL_LOCATIONS, "location", "/locations")
+
+    @field_validator("industries")
+    @classmethod
+    def _check_industries(cls, value):
+        return _validate_canonical(value, CANONICAL_INDUSTRIES, "industry", "/industries")
 
 
 class SearchCriteriaOut(BaseModel):
@@ -67,6 +111,7 @@ class SearchCriteriaOut(BaseModel):
     label: str | None
     keywords: list[str]
     locations: list[str]
+    industries: list[str]
     salary_min: int | None
     contract_types: list[str]
     sources_enabled: list[str] | None
@@ -94,6 +139,8 @@ class JobOut(BaseModel):
     title: str
     company: str
     location: str | None
+    location_category: str | None
+    industry_category: str | None
     remote_type: str | None
     salary_text: str | None
     salary_min: int | None
