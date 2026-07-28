@@ -22,16 +22,46 @@ Safe to re-run — recomputes and overwrites both category columns for
 every job each time, so running it twice just does redundant work, not
 harm.
 """
-from app.db import get_session
+import os
+
+from app.db import get_session, DATABASE_URL
 from app.locations import categorize_location
 from app.industries import categorize_industry
 from app.models import Job
 
 
+def _masked_target(url: str) -> str:
+    """Shows enough of the connection target to confirm it's the right database, without printing the password."""
+    if "@" not in url:
+        return url
+    _, host_part = url.rsplit("@", 1)
+    return f"...@{host_part}"
+
+
 def backfill():
+    print(f"Connecting to: {_masked_target(DATABASE_URL)}")
+    if "localhost" in DATABASE_URL or "gradscout_dev" in DATABASE_URL:
+        print(
+            "\n*** WARNING: this looks like the LOCAL default database, not a "
+            "real Supabase URL. If you meant to backfill production, set "
+            "DATABASE_URL explicitly before running this script. Continuing "
+            "against the local database in 3 seconds... (Ctrl+C to cancel) ***\n"
+        )
+        import time
+        time.sleep(3)
+
     session = get_session()
     jobs = session.query(Job).all()
     print(f"Found {len(jobs)} job(s) to categorize...")
+
+    if len(jobs) == 0:
+        print(
+            "\nZero jobs found. Either this is genuinely an empty database, "
+            "or DATABASE_URL pointed somewhere unexpected — worth double-checking "
+            "the connection target printed above matches your real Supabase project."
+        )
+        session.close()
+        return
 
     location_counts: dict[str, int] = {}
     industry_counts: dict[str, int] = {}
