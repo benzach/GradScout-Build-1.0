@@ -9,24 +9,43 @@ backend drifting out of sync over time.
 
 categorize_location() is called once, at job-storage time (see
 app/storage.py), converting whatever free-text location a scraper
-happened to produce ("Central London, Greater London", "Manchester
-(Hybrid)", "Remote - UK wide") into exactly one of these buckets. This
-is what makes a finite dropdown filter possible at all — matching.py's
-location filter can then do simple exact-membership checking instead of
-fuzzy substring matching against arbitrary free text.
+happened to produce into exactly one of these buckets.
 
-Known limitations, worth being upfront about:
-  - This is substring/keyword matching against the job's structured
-    location field (not the full description), not a real geocoding
-    service. A location like "Slough" or "Guildford" — genuinely
-    commutable to London — falls into "Other UK" rather than "London",
-    since there's no keyword match for either name in the London
-    pattern. A real postcode/geocoding-based approach would be the
-    natural upgrade if this proves too coarse in practice.
-  - "York" vs "New York": word-boundary matching means "New York" (a US
-    city) would match the "York" pattern, same as "New London,
-    Connecticut" matching "London" — accepted as effectively irrelevant
-    for a UK-only graduate platform rather than engineered around.
+Rebuilt against real production data (2,901 live jobs) after the first
+version showed 69% falling into "Other UK" — that rate was too high to
+be a tuning issue, so rather than guess at more keywords, the actual
+raw location strings behind every "Other UK" job were pulled and
+reviewed. Three real patterns emerged, each with a different fix:
+
+1. UK POSTCODES, not city names. Several sources return raw postcodes
+   ("EC3M6BL", "M13LD", "NN157JU") instead of a readable place name —
+   the original version only ever looked for city names in the text,
+   so a postcode-only string had literally nothing to match. Fixed by
+   decoding the postcode's leading letter area code (e.g. "EC" -> EC
+   is a London postcode area) via _POSTCODE_AREA_TO_LOCATION below.
+2. Genuine missing UK towns — Stockport, Warrington, Doncaster,
+   Blackpool, Chesterfield, Burnley, Woking, Basingstoke all appeared
+   repeatedly in the real data and simply weren't in the original list.
+3. Non-UK jobs. Kuala Lumpur, Madrid, Dublin, Kathmandu, Singapore,
+   Hong Kong, Lahore, and even Dutch-language job titles show up in
+   the real dataset despite sources being configured for UK results.
+   These were previously silently mislabeled "Other UK", which is
+   actively wrong, not just imprecise — a Madrid job is not in the UK.
+   Given an honest "International" category instead. The proper fix
+   for jobs like this appearing at all is tighter scraper-level
+   location filtering — a separate, real follow-up, not something this
+   taxonomy should paper over.
+
+Known limitations, still worth being upfront about:
+  - Postcode area decoding is a best-effort lookup covering the areas
+    that map cleanly to a canonical location — some valid UK postcode
+    areas (e.g. TN, covering Tunbridge Wells/Tonbridge) aren't mapped
+    to any of our 60 named cities and will still fall to "Other UK".
+    That's a real, accepted gap, not a bug — better to leave a genuine
+    unknown as "Other UK" than force it into a nearby but wrong city.
+  - "York" vs "New York" and "London" vs "New London, Connecticut":
+    word-boundary matching means these US cities would technically
+    match — accepted as effectively irrelevant for a UK-only platform.
 """
 import re
 
@@ -40,7 +59,8 @@ CANONICAL_LOCATIONS = [
     "Wolverhampton", "Stoke-on-Trent", "Preston", "Bradford", "Ipswich",
     "Northampton", "Swindon", "Peterborough", "Luton", "Watford",
     "Guildford", "Chester", "Lincoln", "Gloucester", "Cheltenham",
-    "Middlesbrough",
+    "Middlesbrough", "Stockport", "Warrington", "Doncaster", "Blackpool",
+    "Chesterfield", "Burnley", "Woking", "Basingstoke",
     # Scotland
     "Edinburgh", "Glasgow", "Aberdeen", "Dundee",
     # Wales
@@ -48,7 +68,7 @@ CANONICAL_LOCATIONS = [
     # Northern Ireland
     "Belfast",
     # Catch-alls
-    "Remote", "Other UK",
+    "Remote", "International", "Other UK",
 ]
 
 # Substrings (lowercase) that, if found anywhere in the raw location
@@ -99,6 +119,14 @@ _LOCATION_PATTERNS = [
     ("Gloucester", ["gloucester"]),
     ("Cheltenham", ["cheltenham"]),
     ("Middlesbrough", ["middlesbrough"]),
+    ("Stockport", ["stockport"]),
+    ("Warrington", ["warrington"]),
+    ("Doncaster", ["doncaster"]),
+    ("Blackpool", ["blackpool"]),
+    ("Chesterfield", ["chesterfield"]),
+    ("Burnley", ["burnley"]),
+    ("Woking", ["woking"]),
+    ("Basingstoke", ["basingstoke"]),
     ("Edinburgh", ["edinburgh"]),
     ("Glasgow", ["glasgow"]),
     ("Aberdeen", ["aberdeen"]),
@@ -108,7 +136,64 @@ _LOCATION_PATTERNS = [
     ("Belfast", ["belfast"]),
 ]
 
-_REMOTE_KEYWORDS = ["remote", "work from home", "wfh", "anywhere", "home based", "home-based"]
+# Non-UK cities that showed up in real production data despite sources
+# being configured for UK results — see module docstring. Deliberately
+# limited to cities actually observed, not broader country names: an
+# earlier version also included generic country names like "ireland"
+# as a speculative extension, which caused a real regression — "Belfast,
+# Northern Ireland" (genuinely UK territory) was being miscategorized as
+# International, since "Ireland" appears as a standalone word inside
+# "Northern Ireland" too. Evidence-based city names avoid this risk
+# entirely; broader country-name matching isn't worth the collision risk
+# without a specific observed case requiring it.
+_INTERNATIONAL_PATTERNS = [
+    "kuala lumpur", "madrid", "dublin", "kathmandu", "singapore",
+    "hong kong", "lahore",
+]
+
+_REMOTE_KEYWORDS = [
+    "remote", "work from home", "wfh", "anywhere", "home based",
+    "home-based", "internet",  # "internet" seen in real data as a
+                                 # placeholder location for fully-remote roles
+]
+
+# UK postcode "area" codes (the 1-2 leading letters of a postcode, e.g.
+# "EC" in "EC3M 6BL") mapped to the nearest canonical location. Only
+# includes areas with a clean, sensible mapping to one of our named
+# cities — see the "known limitations" note in the module docstring for
+# what's deliberately left unmapped.
+_POSTCODE_AREA_TO_LOCATION = {
+    "E": "London", "EC": "London", "N": "London", "NW": "London",
+    "SE": "London", "SW": "London", "W": "London", "WC": "London",
+    "M": "Manchester", "B": "Birmingham", "LS": "Leeds", "BS": "Bristol",
+    "L": "Liverpool", "S": "Sheffield", "NE": "Newcastle", "NG": "Nottingham",
+    "LE": "Leicester", "SO": "Southampton", "OX": "Oxford", "CB": "Cambridge",
+    "RG": "Reading", "BN": "Brighton", "YO": "York", "BA": "Bath",
+    "CV": "Coventry", "DE": "Derby", "HU": "Hull", "PL": "Plymouth",
+    "NR": "Norwich", "EX": "Exeter", "MK": "Milton Keynes", "PO": "Portsmouth",
+    "BH": "Bournemouth", "SR": "Sunderland", "WV": "Wolverhampton",
+    "ST": "Stoke-on-Trent", "PR": "Preston", "BD": "Bradford", "IP": "Ipswich",
+    "NN": "Northampton", "SN": "Swindon", "PE": "Peterborough", "LU": "Luton",
+    "WD": "Watford", "GU": "Guildford", "CH": "Chester", "LN": "Lincoln",
+    "GL": "Gloucester", "TS": "Middlesbrough", "SK": "Stockport",
+    "WA": "Warrington", "DN": "Doncaster", "FY": "Blackpool",
+    "EH": "Edinburgh", "G": "Glasgow", "AB": "Aberdeen", "DD": "Dundee",
+    "CF": "Cardiff", "SA": "Swansea", "BT": "Belfast",
+}
+
+# Matches the leading letter(s) of a UK postcode outward code, e.g.
+# "EC3M6BL" -> "EC", "M13LD" -> "M", "RG11AF" -> "RG".
+_POSTCODE_AREA_PATTERN = re.compile(r"^([A-Z]{1,2})\d")
+
+
+def _try_match_postcode(raw_location: str) -> str | None:
+    """Returns a canonical location if the raw text looks like a bare UK postcode with a known area code, else None."""
+    candidate = raw_location.strip().upper().replace(" ", "")
+    match = _POSTCODE_AREA_PATTERN.match(candidate)
+    if not match:
+        return None
+    area = match.group(1)
+    return _POSTCODE_AREA_TO_LOCATION.get(area)
 
 
 def categorize_location(raw_location: str, remote_type: str = "") -> str:
@@ -117,20 +202,27 @@ def categorize_location(raw_location: str, remote_type: str = "") -> str:
     remote_type signal from normalize.py, if available) onto exactly
     one of CANONICAL_LOCATIONS.
 
-    Remote is checked first and takes priority over any city mentioned
-    in the text — a listing that says "London (Remote)" is categorized
-    as Remote, since that's the more useful bucket for someone
-    specifically filtering for remote work regardless of which city the
-    employer happens to be headquartered in.
+    Check order: Remote -> International -> named UK city -> UK
+    postcode -> Other UK. Remote is checked first and takes priority
+    over any city mentioned in the text — a listing that says "London
+    (Remote)" is categorized as Remote, since that's the more useful
+    bucket for someone specifically filtering for remote work.
     """
     text = (raw_location or "").lower()
 
     if remote_type == "remote" or any(kw in text for kw in _REMOTE_KEYWORDS):
         return "Remote"
 
+    if any(kw in text for kw in _INTERNATIONAL_PATTERNS):
+        return "International"
+
     for category, patterns in _LOCATION_PATTERNS:
         for pattern in patterns:
             if re.search(rf"\b{re.escape(pattern)}\b", text):
                 return category
+
+    postcode_match = _try_match_postcode(raw_location or "")
+    if postcode_match:
+        return postcode_match
 
     return "Other UK"
