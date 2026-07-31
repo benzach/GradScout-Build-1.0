@@ -151,6 +151,26 @@ _INTERNATIONAL_PATTERNS = [
     "hong kong", "lahore",
 ]
 
+# GENERALIZED international detection: real data shows a genuine,
+# repeatable pattern — non-UK listings from Jooble/Adzuna often suffix a
+# short country code, set off by a comma, hyphen, or parenthesis, e.g.
+# "Kathmandu (NP)", "Lahore (PK)", "Singapore-SGP", "Singapore, SGP".
+# This catches ANY non-UK country this pattern appears for, not just
+# ones we happen to have already seen and hardcoded above — a much
+# better generalization than growing the specific-city list forever.
+# Checked against the ORIGINAL (not lowercased) text, since country
+# codes are meaningfully uppercase. "UK"/"GB" are explicitly excluded
+# so a listing like "Manchester, UK" doesn't falsely trigger this.
+_NON_UK_SUFFIX_CODE_PATTERN = re.compile(r"[,\-\(]\s*([A-Z]{2,3})\)?\s*$")
+_UK_COUNTRY_CODES = {"UK", "GB"}
+
+
+def _has_non_uk_suffix_code(raw_location: str) -> bool:
+    match = _NON_UK_SUFFIX_CODE_PATTERN.search(raw_location or "")
+    if not match:
+        return False
+    return match.group(1) not in _UK_COUNTRY_CODES
+
 _REMOTE_KEYWORDS = [
     "remote", "work from home", "wfh", "anywhere", "home based",
     "home-based", "internet",  # "internet" seen in real data as a
@@ -202,11 +222,18 @@ def categorize_location(raw_location: str, remote_type: str = "") -> str:
     remote_type signal from normalize.py, if available) onto exactly
     one of CANONICAL_LOCATIONS.
 
-    Check order: Remote -> International -> named UK city -> UK
-    postcode -> Other UK. Remote is checked first and takes priority
-    over any city mentioned in the text — a listing that says "London
-    (Remote)" is categorized as Remote, since that's the more useful
-    bucket for someone specifically filtering for remote work.
+    Check order: Remote -> International (specific cities, then general
+    suffix-code pattern) -> named UK city -> UK postcode -> Other UK.
+    Remote is checked first and takes priority over any city mentioned
+    in the text — a listing that says "London (Remote)" is categorized
+    as Remote, since that's the more useful bucket for someone
+    specifically filtering for remote work.
+
+    The general suffix-code check runs BEFORE the UK city name loop
+    deliberately: "Cambridge, MA" (Cambridge, Massachusetts) shares a
+    name with UK Cambridge — checking the suffix code first correctly
+    flags it International before the city-name loop ever gets a chance
+    to match the word "Cambridge" and miscategorize it as the UK city.
     """
     text = (raw_location or "").lower()
 
@@ -214,6 +241,9 @@ def categorize_location(raw_location: str, remote_type: str = "") -> str:
         return "Remote"
 
     if any(kw in text for kw in _INTERNATIONAL_PATTERNS):
+        return "International"
+
+    if _has_non_uk_suffix_code(raw_location or ""):
         return "International"
 
     for category, patterns in _LOCATION_PATTERNS:

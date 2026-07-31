@@ -51,6 +51,31 @@ class TestInternational:
         assert categorize_location("Belfast, Northern Ireland") == "Belfast"
         assert categorize_location("Northern Ireland") != "International"
 
+    def test_generalized_suffix_code_catches_unseen_countries(self):
+        """
+        Real data showed a repeatable pattern: non-UK listings suffix a
+        short country code set off by a comma/hyphen/paren. This
+        generalizes to any country using that pattern, not just the
+        specific cities already hardcoded above.
+        """
+        cases = ["Warsaw (PL)", "Berlin-DEU", "Toronto, CAN", "Cambridge, MA"]
+        for raw in cases:
+            assert categorize_location(raw) == "International", f"{raw!r} should be caught by the general suffix-code pattern"
+
+    def test_uk_and_gb_suffix_do_not_trigger_international(self):
+        """The general suffix-code pattern must not fire on the UK's own country codes."""
+        assert categorize_location("Manchester, UK") == "Manchester"
+        assert categorize_location("London, GB") == "London"
+
+    def test_cambridge_massachusetts_not_confused_with_uk_cambridge(self):
+        """
+        Ordering matters: the suffix-code check runs BEFORE the UK city
+        name loop specifically so a US city sharing a name with a UK one
+        doesn't get miscategorized as the UK city.
+        """
+        assert categorize_location("Cambridge, MA") == "International"
+        assert categorize_location("Cambridge, Cambridgeshire") == "Cambridge"  # genuine UK Cambridge unaffected
+
 
 class TestNewTowns:
     def test_towns_added_from_real_production_data(self):
